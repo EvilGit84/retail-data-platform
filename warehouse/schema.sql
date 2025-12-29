@@ -1,0 +1,6 @@
+CREATE TABLE IF NOT EXISTS retail_orders (
+    order_id INT PRIMARY KEY,
+    amount DECIMAL(10, 2) NOT NULL,
+    city VARCHAR(100),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
