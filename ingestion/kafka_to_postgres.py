@@ -3,7 +3,7 @@ import json
 import psycopg2
 from datetime import datetime
 
-#kafka consumer to read data from kafka topic and insert into postgres
+# Kafka consumer
 consumer = KafkaConsumer(
     'retail_orders',
     bootstrap_servers='localhost:9092',
@@ -13,8 +13,6 @@ consumer = KafkaConsumer(
     value_deserializer=lambda v: json.loads(v.decode('utf-8'))
 )
 
-
-
 # PostgreSQL connection
 conn = psycopg2.connect(
     host="localhost",
@@ -23,41 +21,62 @@ conn = psycopg2.connect(
     password="retail_password",
     port=5432
 )
-
 cursor = conn.cursor()
-def validate_order(order):
-    required_fields = ['order_id', 'amount', 'city', 'created_at']
 
-    for field in required_fields:
-        if field not in order:
-            return False
+# ---------- Validation & Cleaning ----------
+def validate_and_clean(order):
+    # Required fields
+    if 'order_id' not in order or 'amount' not in order or 'city' not in order:
+        return None
 
+    # Type checks
     if not isinstance(order['order_id'], int):
-        return False
+        return None
 
     if not isinstance(order['amount'], (int, float)) or order['amount'] <= 0:
-        return False
+        return None
 
     if not isinstance(order['city'], str):
-        return False
+        return None
 
-    return True
+    # Cleaning
+    order['city'] = order['city'].strip().lower()
 
+    # Add ingestion timestamp
+    order['created_at'] = datetime.utcnow()
 
+    return order
+
+print("Kafka → PostgreSQL ingestion service started...")
+
+# ---------- Consume & Insert ----------
 for message in consumer:
-    order = message.value
-     # Add current timestamp to the order
-    order['created_at'] = datetime.now()
-    print("Received:", order)
+    raw_order = message.value
+    print("Received raw:", raw_order)
 
+    order = validate_and_clean(raw_order)
 
-    cursor.execute(
-    """
-    INSERT INTO retail_orders (order_id, amount, city, created_at)
-    VALUES (%s, %s, %s, %s)
-    ON CONFLICT (order_id) DO NOTHING;
-    """,
-    (order['order_id'], order['amount'], order['city'], order['created_at'])
-)
-    conn.commit()
-    print("Inserted order into PostgreSQL:", order) 
+    if order is None:
+        print("Invalid record skipped")
+        continue
+
+    try:
+        cursor.execute(
+            """
+            INSERT INTO retail_orders (order_id, amount, city, created_at)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (order_id) DO NOTHING;
+            """,
+            (
+                order['order_id'],
+                order['amount'],
+                order['city'],
+                order['created_at']
+            )
+        )
+        conn.commit()
+        print("Inserted:", order)
+
+    except Exception as e:
+        conn.rollback()
+        print("DB error:", e)
